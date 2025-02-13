@@ -1,9 +1,10 @@
 import gc
 import os
 import sys
-
+import io
 import pandas as pd
 from sqlalchemy import create_engine
+from minio import Minio
 
 
 def write_data_postgres(dataframe: pd.DataFrame) -> bool:
@@ -33,10 +34,16 @@ def write_data_postgres(dataframe: pd.DataFrame) -> bool:
     )
     try:
         engine = create_engine(db_config["database_url"])
-        with engine.connect():
+        with engine.begin() as connection:  # Assure une transaction propre
+            dataframe.to_sql(
+                db_config["dbms_table"],
+                con=connection,
+                index=False,
+                if_exists="append",
+                method="multi"  # Optimise les requêtes pour PostgreSQL
+            )
+            print("conn")
             success: bool = True
-            print("Connection successful! Processing parquet file")
-            dataframe.to_sql(db_config["dbms_table"], engine, index=False, if_exists='append')
 
     except Exception as e:
         success: bool = False
@@ -59,26 +66,73 @@ def clean_column_name(dataframe: pd.DataFrame) -> pd.DataFrame:
     return dataframe
 
 
+def get_minio_client():
+    """
+    Crée et retourne un client Minio
+    """
+    return Minio(
+        "localhost:9000",
+        secure=False,
+        access_key="minio",
+        secret_key="minio123"
+    )
+
+
+def read_parquet_from_minio(client, bucket_name, object_name):
+    """
+    Lit un fichier parquet depuis Minio et le retourne comme DataFrame
+    
+    Parameters:
+        - client (Minio): Client Minio
+        - bucket_name (str): Nom du bucket
+        - object_name (str): Nom de l'objet dans le bucket
+        
+    Returns:
+        - pd.DataFrame: DataFrame contenant les données du fichier parquet
+    """
+    try:
+        # Récupère l'objet de Minio
+        data = client.get_object(bucket_name, object_name)
+        # Lit le fichier parquet directement depuis le flux de données
+        df = pd.read_parquet(io.BytesIO(data.read()))
+        return df
+    except Exception as e:
+        print(f"Erreur lors de la lecture du fichier {object_name}: {e}")
+        return None
+
+
 def main() -> None:
-    # folder_path: str = r'..\..\data\raw'
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    # Construct the relative path to the folder
-    folder_path = os.path.join(script_dir, '..', '..', 'data', 'raw')
-
-    parquet_files = [f for f in os.listdir(folder_path) if
-                     f.lower().endswith('.parquet') and os.path.isfile(os.path.join(folder_path, f))]
-
-    for parquet_file in parquet_files:
-        parquet_df: pd.DataFrame = pd.read_parquet(os.path.join(folder_path, parquet_file), engine='pyarrow')
-
-        clean_column_name(parquet_df)
-        if not write_data_postgres(parquet_df):
-            del parquet_df
-            gc.collect()
-            return
-
-        del parquet_df
-        gc.collect()
+    # Initialise le client Minio
+    minio_client = get_minio_client()
+    bucket_name = "tp1"  # Le bucket utilisé dans le TP1
+    
+    try:
+        # Liste tous les objets dans le bucket
+        objects = minio_client.list_objects(bucket_name)
+        
+        for obj in objects:
+            if obj.object_name.lower().endswith('.parquet'):
+                print(f"Traitement du fichier: {obj.object_name}")
+                
+                # Lit le fichier parquet depuis Minio
+                parquet_df = read_parquet_from_minio(minio_client, bucket_name, obj.object_name)
+                
+                if parquet_df is not None:
+                    # Nettoie les noms de colonnes
+                    clean_column_name(parquet_df)
+                    
+                    # Écrit dans PostgreSQL
+                    if not write_data_postgres(parquet_df):
+                        del parquet_df
+                        gc.collect()
+                        return
+                    
+                    del parquet_df
+                    gc.collect()
+                    
+    except Exception as e:
+        print(f"Erreur lors de l'accès à Minio: {e}")
+        return
 
 
 if __name__ == '__main__':
