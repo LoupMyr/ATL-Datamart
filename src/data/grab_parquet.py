@@ -5,31 +5,27 @@ import os
 
 def main():
     grab_data()
-    
+    write_data_minio()
+    return 0
 
 def grab_data() -> None:
-    base_url = "https://d37ci6vzurychx.cloudfront.net/trip-data/"
+    url = "https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2024-01.parquet"
     destination_folder = os.path.abspath("data/raw")
 
     os.makedirs(destination_folder, exist_ok=True)
 
-    file_type = "yellow_tripdata_2024-"
-    
-    for month in range(1, 9):
-        month_str = f"{month:02d}"  
-        
-        url = f"{base_url}{file_type}{month_str}.parquet"
-        file_path = os.path.join(destination_folder, f"{file_type}{month_str}.parquet")
-        
-        try:
-            # Vérifier si le fichier existe sur le serveur avant de télécharger
-            response = urllib.request.urlopen(url)
-            if response.status == 200:
-                print(f"Téléchargement de {url}")
-                urllib.request.urlretrieve(url, file_path)
-                print(f"Fichier téléchargé")
-        except Exception as e:
-            print(f"Erreur : {e}")
+    file_name = "yellow_taxis-january_2024"
+    file_path = os.path.join(destination_folder, f"{file_name}.parquet")
+
+    try:
+        # Vérifier si le fichier existe sur le serveur avant de télécharger
+        response = urllib.request.urlopen(url)
+        if response.status == 200:
+            print(f"Téléchargement de {url}")
+            urllib.request.urlretrieve(url, file_path)
+            print(f"Fichier téléchargé")
+    except Exception as e:
+        print(f"Erreur lors du téléchargement de {url} : {e}")
 
 
 def write_data_minio():
